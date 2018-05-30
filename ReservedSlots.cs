@@ -1,62 +1,54 @@
-﻿using Rocket.Core.Logging;
+﻿using System.Linq;
+using Rocket.Core.Logging;
 using Rocket.Core.Plugins;
-using Rocket.Unturned.Permissions;
 using SDG.Unturned;
-using Steamworks;
-using Rocket.Core;
-using Rocket.API;
-using Rocket.API.Serialisation;
-using Rocket.Core.RCON;
-using Rocket.Unturned.Chat;
-using Rocket.Unturned;
+using Rocket.API.DependencyInjection;
+using Rocket.API.Eventing;
+using Rocket.API.Permissions;
+using Rocket.API.Player;
+using Rocket.Core.Player.Events;
 using Rocket.Unturned.Player;
+using Rocket.Unturned.Player.Events;
 
 namespace ReservedSlots
 {
-    public class ReservedSlots : RocketPlugin<ReservedSlotsConfig>
+    public class ReservedSlots : Plugin<ReservedSlotsConfig>,
+        IEventListener<UnturnedPlayerPreConnectEvent>,
+        IEventListener<PlayerConnectedEvent>,
+        IEventListener<PlayerDisconnectedEvent>
     {
-        public static ReservedSlots Instance;
-        private byte lastMaxSlotCount;
-
-        protected override void Load()
+        public ReservedSlots(IDependencyContainer container) : base("ReservedSlots", container)
         {
-            Instance = this;
-            UnturnedPermissions.OnJoinRequested += Events_OnJoinRequested;
-            Logger.Log(string.Format("Reserved Slots enabled: {0}, Count: {1}, Allowfill: {2}, DynamicSlots: {3}, min: {4}, max:{5}.", Instance.Configuration.Instance.ReservedSlotEnable, Instance.Configuration.Instance.ReservedSlotCount, Instance.Configuration.Instance.AllowFill, Instance.Configuration.Instance.AllowDynamicMaxSlot, Instance.Configuration.Instance.MinSlotCount, Instance.Configuration.Instance.MaxSlotCount));
-            if (Instance.Configuration.Instance.AllowDynamicMaxSlot)
-            {
-                if (Instance.Configuration.Instance.MinSlotCount < 2)
-                {
-                    Logger.LogError("Reserved Slots Config Error: Minimum slots is set to 0, changing to the Unturned server default of 8 slots.");
-                    Instance.Configuration.Instance.MinSlotCount = 8;
-                }
-                if (Instance.Configuration.Instance.MaxSlotCount > 48)
-                {
-                    Logger.LogWarning("Reserved Slots Config Error: Maximum slots is set to something higher than 48, limiting to 48.");
-                    Instance.Configuration.Instance.MaxSlotCount = 48;
-                }
-                if (Instance.Configuration.Instance.MaxSlotCount < Instance.Configuration.Instance.MinSlotCount)
-                {
-                    Logger.LogError("Reserved Slots Config Error: Max slot count is less than initial slot count, Setting max slot count to min slot count + reserved slots, or max slot count, if over 48.");
-                    byte tmp = (byte)(Instance.Configuration.Instance.MinSlotCount + Instance.Configuration.Instance.ReservedSlotCount);
-                    Instance.Configuration.Instance.MaxSlotCount = tmp > Instance.Configuration.Instance.MaxSlotCount ? Instance.Configuration.Instance.MaxSlotCount : tmp;
-                }
-                SetMaxPlayers();
-                U.Events.OnPlayerConnected += Events_OnPlayerConnected;
-                U.Events.OnPlayerDisconnected += Events_OnPlayerDisconnected;
-            }
-            UnturnedPermissions.OnJoinRequested += Events_OnJoinRequested;
-            Instance.Configuration.Save();
         }
 
-        protected override void Unload()
+        private byte _lastMaxSlotCount;
+
+        protected override void OnLoad(bool isFromReload)
         {
-            UnturnedPermissions.OnJoinRequested -= Events_OnJoinRequested;
-            if (Instance.Configuration.Instance.AllowDynamicMaxSlot)
+            Logger.Log(
+                $"Reserved Slots enabled: {ConfigurationInstance.ReservedSlotEnable}, Count: {ConfigurationInstance.ReservedSlotCount}, Allowfill: {ConfigurationInstance.AllowFill}, DynamicSlots: {ConfigurationInstance.AllowDynamicMaxSlot}, min: {ConfigurationInstance.MinSlotCount}, max:{ConfigurationInstance.MaxSlotCount}.");
+            if (ConfigurationInstance.AllowDynamicMaxSlot)
             {
-                U.Events.OnPlayerConnected -= Events_OnPlayerConnected;
-                U.Events.OnPlayerDisconnected -= Events_OnPlayerDisconnected;
+                if (ConfigurationInstance.MinSlotCount < 2)
+                {
+                    Logger.LogError("Reserved Slots Config Error: Minimum slots is set to 0, changing to the Unturned server default of 8 slots.");
+                    ConfigurationInstance.MinSlotCount = 8;
+                }
+                if (ConfigurationInstance.MaxSlotCount > 48)
+                {
+                    Logger.LogWarning("Reserved Slots Config Error: Maximum slots is set to something higher than 48, limiting to 48.");
+                    ConfigurationInstance.MaxSlotCount = 48;
+                }
+                if (ConfigurationInstance.MaxSlotCount < ConfigurationInstance.MinSlotCount)
+                {
+                    Logger.LogError("Reserved Slots Config Error: Max slot count is less than initial slot count, Setting max slot count to min slot count + reserved slots, or max slot count, if over 48.");
+                    byte tmp = (byte)(ConfigurationInstance.MinSlotCount + ConfigurationInstance.ReservedSlotCount);
+                    ConfigurationInstance.MaxSlotCount = tmp > ConfigurationInstance.MaxSlotCount ? ConfigurationInstance.MaxSlotCount : tmp;
+                }
+                SetMaxPlayers();
             }
+
+            SaveConfiguration();
         }
 
         private void SetMaxPlayers(bool onDisconnect = false)
@@ -64,85 +56,93 @@ namespace ReservedSlots
             // Minus one if it is coming from disconnect, they are still accounted towards the total player count at this time.
             int curPlayerNum = Provider.clients.Count - (onDisconnect ? 1 : 0);
             byte curPlayerMax = Provider.maxPlayers;
-            if (curPlayerNum + Instance.Configuration.Instance.ReservedSlotCount < Instance.Configuration.Instance.MinSlotCount)
-                curPlayerMax = Instance.Configuration.Instance.MinSlotCount;
-            else if (curPlayerNum + Instance.Configuration.Instance.ReservedSlotCount > Instance.Configuration.Instance.MaxSlotCount)
-                curPlayerMax = Instance.Configuration.Instance.MaxSlotCount;
-            else if (curPlayerNum + Instance.Configuration.Instance.ReservedSlotCount >= Instance.Configuration.Instance.MinSlotCount && curPlayerNum + Instance.Configuration.Instance.ReservedSlotCount <= Instance.Configuration.Instance.MaxSlotCount)
+            if (curPlayerNum + ConfigurationInstance.ReservedSlotCount < ConfigurationInstance.MinSlotCount)
+                curPlayerMax = ConfigurationInstance.MinSlotCount;
+            else if (curPlayerNum + ConfigurationInstance.ReservedSlotCount > ConfigurationInstance.MaxSlotCount)
+                curPlayerMax = ConfigurationInstance.MaxSlotCount;
+            else if (curPlayerNum + ConfigurationInstance.ReservedSlotCount >= ConfigurationInstance.MinSlotCount && curPlayerNum + ConfigurationInstance.ReservedSlotCount <= ConfigurationInstance.MaxSlotCount)
             {
-                curPlayerMax = (byte)(curPlayerNum + Instance.Configuration.Instance.ReservedSlotCount);
-                if (curPlayerMax > lastMaxSlotCount)
-                    UnturnedChat.Say(CSteamID.Nil, "Max slots increased to: " + curPlayerMax);
-                if (curPlayerMax < lastMaxSlotCount)
-                    UnturnedChat.Say(CSteamID.Nil, "Max slots Decreased to: " + curPlayerMax);
+                curPlayerMax = (byte)(curPlayerNum + ConfigurationInstance.ReservedSlotCount);
             }
-            if (lastMaxSlotCount != curPlayerMax)
+            if (_lastMaxSlotCount != curPlayerMax)
             {
                 Provider.maxPlayers = curPlayerMax;
-                lastMaxSlotCount = curPlayerMax;
+                _lastMaxSlotCount = curPlayerMax;
             }
         }
 
-        private void Events_OnJoinRequested(CSteamID CSteamID, ref ESteamRejection? rejectionReason)
+        private bool CheckReserved(UnturnedPlayer player)
         {
-            if (Instance.Configuration.Instance.ReservedSlotEnable && Instance.Configuration.Instance.ReservedSlotCount > 0 && Instance.Configuration.Instance.Groups != null && Instance.Configuration.Instance.Groups.Count > 0)
+            if (SteamAdminlist.checkAdmin(player.CSteamID))
             {
-                int numPlayers = Provider.clients.Count;
-                byte maxPlayers = Provider.maxPlayers;
-                // Run slot fill calculations, if it is enabled.
-                if (Instance.Configuration.Instance.AllowFill)
+                return true;
+            }
+
+            var permissionProvider = Container.Resolve<IPermissionProvider>();
+
+            foreach (var group in permissionProvider.GetGroups(player))
+            {
+                if (ConfigurationInstance.Groups.Contains(@group.Id))
                 {
-                    foreach (SteamPlayer player in Provider.clients)
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void HandleEvent(IEventEmitter emitter, UnturnedPlayerPreConnectEvent @event)
+        {
+            var player = @event.Player as UnturnedPlayer;
+            if (player == null)
+                return;
+
+            if (!ConfigurationInstance.ReservedSlotEnable || ConfigurationInstance.ReservedSlotCount <= 0 ||
+                ConfigurationInstance.Groups == null || ConfigurationInstance.Groups.Length <= 0) return;
+
+            int numPlayers = Provider.clients.Count;
+            byte maxPlayers = Provider.maxPlayers;
+
+            var playerManager = Container.Resolve<IPlayerManager>();
+
+            // Run slot fill calculations, if it is enabled.
+            if (ConfigurationInstance.AllowFill)
+            {
+                foreach (var onlinePlayer in playerManager.OnlinePlayers)
+                {
+                    if (CheckReserved((UnturnedPlayer)onlinePlayer))
                     {
-                        if (CheckReserved(player.playerID.steamID))
-                        {
-                            numPlayers--;
-                        }
+                        numPlayers--;
                     }
                 }
+            }
 
-                // Check to see if dynamic slots are enabled, and adjust the max slot count on the server if they are.
-                if ((!Instance.Configuration.Instance.AllowDynamicMaxSlot && numPlayers + Instance.Configuration.Instance.ReservedSlotCount >= maxPlayers) || (Instance.Configuration.Instance.AllowDynamicMaxSlot && numPlayers + Instance.Configuration.Instance.ReservedSlotCount >= Instance.Configuration.Instance.MaxSlotCount))
+            // Check to see if dynamic slots are enabled, and adjust the max slot count on the server if they are.
+            if ((!ConfigurationInstance.AllowDynamicMaxSlot && numPlayers + ConfigurationInstance.ReservedSlotCount >= maxPlayers) || (ConfigurationInstance.AllowDynamicMaxSlot && numPlayers + ConfigurationInstance.ReservedSlotCount >= ConfigurationInstance.MaxSlotCount))
+            {
+                // Kick if they aren't a reserved player.
+                if (!CheckReserved(player))
                 {
-                    // Kick if they aren't a reserved player.
-                    if (!CheckReserved(CSteamID))
-                    {
-                        rejectionReason = ESteamRejection.SERVER_FULL;
-                    }
+                    @event.IsCancelled = true;
+                    @event.UnturnedRejectionReason = ESteamRejection.SERVER_FULL;
                 }
             }
         }
 
         // Adjust the max player count on player connect and disconnect, if the dynamic slots feature is enabled.
-        private void Events_OnPlayerConnected(UnturnedPlayer player)
+        public void HandleEvent(IEventEmitter emitter, PlayerConnectedEvent @event)
         {
-            if (Instance.Configuration.Instance.AllowDynamicMaxSlot)
-                SetMaxPlayers();
+            if (!ConfigurationInstance.AllowDynamicMaxSlot)
+                return;
+
+            SetMaxPlayers();
         }
 
-        private void Events_OnPlayerDisconnected(UnturnedPlayer player)
+        public void HandleEvent(IEventEmitter emitter, PlayerDisconnectedEvent @event)
         {
-            if (Instance.Configuration.Instance.AllowDynamicMaxSlot)
-                SetMaxPlayers(true);
-        }
+            if (!ConfigurationInstance.AllowDynamicMaxSlot)
+                return;
 
-        private bool CheckReserved(CSteamID CSteamID)
-        {
-            if (SteamAdminlist.checkAdmin(CSteamID))
-            {
-                return true;
-            }
-            else
-            {
-                foreach (RocketPermissionsGroup group in R.Permissions.GetGroups(new RocketPlayer(CSteamID.ToString()), true))
-                {
-                    if (Instance.Configuration.Instance.Groups.Contains(group.Id))
-                    {
-                        return true;
-                    }
-                }
-                return false;
-            }
+            SetMaxPlayers(true);
         }
     }
 }
