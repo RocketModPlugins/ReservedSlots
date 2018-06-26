@@ -6,7 +6,7 @@
     <OutputType>Library</OutputType>
   </PropertyGroup> 
   <PropertyGroup>
-    <PackageId>SimpleDeathMessages</PackageId>
+    <PackageId>ReservedSlots</PackageId>
     <PackageTags>RocketMod Unturned</PackageTags>
 	<PackageAuthors>cartman-2000, Enes Sadık Özbek &lt;esozbek.me&gt;</PackageAuthors>
     <PackageOwners>cartman-2000</PackageOwners>
