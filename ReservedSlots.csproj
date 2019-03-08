@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net35</TargetFrameworks>
+    <TargetFrameworks>net461</TargetFrameworks>
     <AssemblyName>ReservedSlots</AssemblyName>
     <RootNamespace>ReservedSlots</RootNamespace>
     <OutputType>Library</OutputType>
